@@ -25,7 +25,6 @@ El sistema soporta predictores de orden 1 y 2:
 | `encoder.py` | Módulo encargado de la lectura del WAV, cálculo del residuo y generación del bitstream Huffman. |
 | `decoder.py` | Módulo que lee el archivo binario, decodifica el bitstream y reconstruye el audio a partir del residuo. |
 | `encoded.bin` | Ejemplo de archivo de salida comprimido (generado por el encoder). |
-| `utils/` | (Opcional) Dependencias externas o archivos de audio de prueba. |
 
 ## 🛠️ Requisitos
 
