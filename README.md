@@ -28,7 +28,7 @@ El sistema soporta predictores de orden 1 y 2:
 
 ## 🛠️ Requisitos
 
-El proyecto utiliza Python 3 y las siguientes librerías científicas:
+El proyecto utiliza Python 3 y las siguientes librerías:
 
 ```bash
 pip install numpy scipy huffman
