@@ -26,6 +26,7 @@ def read_audio_encoded(filename):
     # Remover padding
     if padding > 0:
         bitstream = bitstream[:-padding]
+        
     return bitstream, codes, fs, predictor_order
     
 
@@ -46,7 +47,7 @@ def huffman_decode(bitstream, codes):
     return np.array(decoded, dtype=np.int16)
 
 
-def reconstruct_audio(residual, order=2):
+def reconstruct_audio(residual, order=3):
     '''
     Reconstruir audio original desde el residual
     '''
@@ -62,6 +63,14 @@ def reconstruct_audio(residual, order=2):
         reconstructed[1] = residual[1]
         for i in range(2, len(residual)):
             reconstructed[i] = residual[i] + 2*reconstructed[i-1] - reconstructed[i-2]
+    elif order == 3:
+        reconstructed[0] = residual[0]
+        reconstructed[1] = residual[1]
+        reconstructed[2] = residual[2]
+        for i in range(3, len(residual)):
+            reconstructed[i] = residual[i] + 3*reconstructed[i-1] - 3*reconstructed[i-2] + reconstructed[i-3]
+    else:
+        raise ValueError("Solo se soporta orden 1, 2 o 3")
     
     return reconstructed
 

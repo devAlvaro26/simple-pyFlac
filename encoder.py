@@ -33,11 +33,12 @@ def readFile(path):
         return None, None
 
 
-def predictor(x, order=2):
+def predictor(x, order=3):
     '''
     Predictor lineal de orden N
     order=1: x[n] = x[n-1]
     order=2: x[n] = 2*x[n-1] - x[n-2]
+    order=3: x[n] = 3*x[n-1] - 3*x[n-2] + x[n-3]
     '''
     predicted = np.zeros_like(x)
     
@@ -46,8 +47,12 @@ def predictor(x, order=2):
     elif order == 2:
         predicted[1] = x[0]
         predicted[2:] = 2*x[1:-1] - x[:-2]
+    elif order == 3:
+        predicted[1] = x[0]
+        predicted[2] = 2*x[1] - x[0]
+        predicted[3:] = 3*x[2:-1] - 3*x[1:-2] + x[:-3]
     else:
-        raise ValueError("Solo se soporta orden 1 o 2")
+        raise ValueError("Solo se soporta orden 1, 2 o 3")
     
     residual = x - predicted
     return residual, predicted
@@ -76,18 +81,21 @@ def save_audio_encoded(filename, bitstream, codes, sample_rate, predictor_order)
     '''
     Guardar audio comprimido en archivo binario
     '''
-    # Calcular padding necesario
+    # Calcular padding necesario (hacer cadena multiplo de 8 rellenando con 0s)
     padding = (8 - len(bitstream) % 8) % 8
     bitstream_padded = bitstream + '0' * padding
     
     # Convertir a bytes
     num_bytes = len(bitstream_padded) // 8
+
     byte_array = bytearray()
     
     for i in range(num_bytes):
         byte = bitstream_padded[i*8:(i+1)*8]
+        # Convertir a decimal para guaradar en lista
         byte_array.append(int(byte, 2))
     
+    # Convertir decimal a bytes
     byte_data = bytes(byte_array)
 
     compressed_data = {
@@ -107,12 +115,10 @@ def save_audio_encoded(filename, bitstream, codes, sample_rate, predictor_order)
 
 
 if __name__ == "__main__":
-    order = 2
-
     fs, audio = readFile(PATH_AUDIO)
 
-    residual, predicted = predictor(audio,order)
+    residual, predicted = predictor(audio)
 
     bitstream, codes = huffman_encode(residual)
 
-    save_audio_encoded("encoded.bin",bitstream, codes, fs, order)
+    save_audio_encoded("encoded.bin",bitstream, codes, fs, 3)
