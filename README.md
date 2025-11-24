@@ -1,34 +1,51 @@
-# Compresor de Audio Lossless (Predictor Lineal + Huffman)
+# Compresor de Audio Lossless (LPC + Rice Coding)
 
-Este repositorio contiene una implementación en Python de un **códec de audio sin pérdidas (lossless)**. El sistema utiliza técnicas de predicción lineal para decorrelar la señal y codificación de Huffman para comprimir la entropía del residuo resultante.
+Implementación en Python de un **códec de audio sin pérdidas (lossless)**. El sistema utiliza **Codificación Predictiva Lineal (LPC)** para modelar la señal espectralmente y **Codificación Rice** (Golomb-Rice) con adaptación dinámica de parámetros para comprimir el residuo.
 
 ## 📋 Descripción del Proyecto
 
-El objetivo es reducir el tamaño de archivos de audio `.wav` (mono, 16-bit PCM) sin perder información al reconstruirlos. El flujo de procesamiento es el siguiente:
+Comprimir una señal PCM sin pérdidas estilo FLAC.
 
-1.  **Lectura:** Se lee el audio RAW.
-2.  **Predicción Lineal:** Se estima la muestra actual $x[n]$ basándose en muestras anteriores ($x[n-1], x[n-2]$).
-3.  **Cálculo del Residuo:** Se obtiene la diferencia entre la señal real y la predicción ($e[n] = x[n] - \hat{x}[n]$). El residuo tiene una varianza mucho menor que la señal original, reduciendo su entropía.
-4.  **Codificación Huffman:** Se asignan códigos de longitud variable a los valores del residuo según su frecuencia de aparición.
-5.  **Empaquetado:** Se guarda el bitstream y la tabla de códigos en un archivo binario (`.bin`).
+### Flujo de Procesamiento (Encoder)
 
-### Modelos de Predicción Soportados
-El sistema soporta predictores de orden 1 y 2:
-- **Orden 1:** $\hat{x}[n] = x[n-1]$
-- **Orden 2:** $\hat{x}[n] = 2x[n-1] - x[n-2]$
+1.  **Tramado (Framing):** Segmentación entramas (por defecto 4096 muestras).
+2.  **Análisis LPC (Levinson-Durbin):** Para cada trama, se calcula la autocorrelación y se utiliza el algoritmo de Levinson-Durbin para encontrar los coeficientes óptimos del filtro predictor (orden configurable, por defecto 12).
+3.  **Cálculo del Residuo:** Se predice la señal actual $\hat{x}[n]$ mediante la combinación lineal de muestras pasadas y los coeficientes LPC. La diferencia con la señal real es el residuo:
+    $$e[n] = x[n] - \text{round}(\hat{x}[n])$$
+   .
+4.  **Codificación de Entropía (Rice):**
+    - **Zigzag Encoding:** Convierte el residuo (con signo) a enteros positivos para optimizar la codificación ($0 \to 0, -1 \to 1, 1 \to 2...$).
+    - **Estimación de K:** Se calcula el parámetro $k$ óptimo para la codificación Rice basándose en la media absoluta del residuo de la trama actual.
+    - **Rice Coding:** Se genera el bitstream comprimido separando el valor en cociente (unario) y resto (binario).
+5.  **Empaquetado:** Se guarda un archivo binario (`.bin`) que contiene las cabeceras globales, y para cada trama: su metadata ($k$, padding, longitud), los coeficientes LPC y el bitstream comprimido.
+
+### Flujo de Decodificación (Decoder)
+
+1.  **Lectura de Tramas:** Se extraen los parámetros $k$ y los coeficientes LPC de cada bloque.
+2.  **Decodificación Rice y Zigzag:** Se recupera el residuo original $e[n]$.
+3.  **Síntesis LPC:** Se reconstruye la señal sumando el residuo a la predicción generada por los coeficientes recuperados:
+    $$x[n] = e[n] + \text{round}(\hat{x}[n])$$
+   .
 
 ## 📂 Estructura del Repositorio
 
 | Archivo | Descripción |
 | :--- | :--- |
-| `codec.py` | **Script principal**. Ejecuta el ciclo completo: carga audio, comprime, guarda, descomprime y compara la señal reconstruida con la original. |
-| `encoder.py` | Módulo encargado de la lectura del WAV, cálculo del residuo y generación del bitstream Huffman. |
-| `decoder.py` | Módulo que lee el archivo binario, decodifica el bitstream y reconstruye el audio a partir del residuo. |
-| `encoded.bin` | Ejemplo de archivo de salida comprimido (generado por el encoder). |
+| `encoder_v2.py` | Script de codificación. Lee el WAV, aplica LPC (Levinson-Durbin), estima el parámetro $k$ de Rice y genera el archivo binario `encoded_v2.bin`. |
+| `decoder_v2.py` | Script de decodificación. Lee el binario, reconstruye el audio mediante síntesis LPC y guarda el archivo `Decoded_Audio_v2.wav`. |
+| `encoded_v2.bin` | Archivo de salida comprimido generado por el encoder. |
+| `SultansOfSwing_mono.wav` | Archivo de audio de ejemplo (entrada del encoder). |
+
+## ⚙️ Configuración del Algoritmo
+
+El sistema permite ajustar los siguientes parámetros en el código:
+
+- **FRAME_SIZE:** Tamaño de la ventana de análisis (Default: 4096 muestras). Ventanas más grandes pueden mejorar la compresión en señales estables, pero empeorarla en transitorios rápidos.
+- **Predictor Order:** Orden del filtro LPC (Default: 12). Un orden mayor modela mejor la envolvente espectral pero requiere guardar más coeficientes por trama.
 
 ## 🛠️ Requisitos
 
-El proyecto utiliza Python 3 y las siguientes librerías:
+El proyecto utiliza Python 3 y las siguientes librerías estándar científicas:
 
 ```bash
-pip install numpy scipy huffman
+pip install numpy scipy
