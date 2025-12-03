@@ -1,8 +1,10 @@
 import numpy as np
 from scipy.io import wavfile
 import struct
+import concurrent.futures
+import os
 
-ENCODED_FILE = "encoded_v2.bin"
+ENCODED_FILE = "encoded_v3.bin"
 
 def bytes_to_bits(byte_data):
     '''
@@ -67,6 +69,18 @@ def rice_decode(byte_data, k, num_samples):
     return np.array(decoded, dtype=np.int64)
 
 
+def process_single_frame_decode(args):
+    '''
+    Función para decodificar una sola trama (para uso en pools).
+    args: (byte_data, k, length, coefs)
+    '''
+    byte_data, k, length, coefs = args
+    residual = rice_decode(byte_data, k, length).astype(np.int64)
+    reconstructed = lpc_synthesis(residual.astype(np.float64), coefs.astype(np.float64))
+    samples = np.round(reconstructed).astype(np.int16)
+    return samples[:length]
+
+
 def lpc_synthesis(residual, coefs):
     '''
     Reconstruye la señal a partir del residual y coeficientes LPC.
@@ -108,6 +122,7 @@ def load_audio_encoded(filename):
         print(f"Sample rate: {sample_rate} Hz")
         print(f"Predictor order: {predictor_order}")
         print(f"Frame size: {frame_size}")
+        print(f"Número de tramas: {num_frames}")
         
         frames_data = []
         
@@ -134,36 +149,43 @@ def load_audio_encoded(filename):
                 'coefs': coefs
             })
             
-            print(f"\rCargando tramas {i+1}/{num_frames}", end='', flush=True)
+            print(f"\rCargando trama {i+1}/{num_frames}", end='', flush=True)
         
         print()
         return sample_rate, predictor_order, frame_size, frames_data
 
 
-def decode_frames(frames_data):
+def decode_frames(frames_data, leave_one_core=True):
     '''
     Decodificar todas las tramas y reconstruir el audio completo.
     '''
     all_samples = []
     num_frames = len(frames_data)
-    
-    print(f"\nDecodificando {num_frames} tramas...")
-    
-    for i, frame in enumerate(frames_data):
-        # Decodificar Rice (zigzag decode)
-        residual = rice_decode(frame['bytes'], frame['k'], frame['length']).astype(np.int64)
-        
-        # Síntesis LPC
-        reconstructed = lpc_synthesis(residual.astype(np.float64), frame['coefs'].astype(np.float64))
-        
-        # Convertir a int16
-        samples = np.round(reconstructed).astype(np.int16)
-        
-        # Solo agregar la parte válida (sin padding)
-        all_samples.append(samples[:frame['length']])
-        
-        print(f"\rTrama {i+1}/{num_frames} decodificada", end='', flush=True)
-    
+
+    print(f"\nDecodificando {num_frames} tramas en paralelo...")
+
+    # Preparar argumentos para cada trama
+    frames_to_process = []
+    for frame in frames_data:
+        frames_to_process.append((frame['bytes'], frame['k'], frame['length'], frame['coefs']))
+
+    # Elegir número de workers
+    max_workers = os.cpu_count() - 1 if leave_one_core else os.cpu_count()
+    max_workers = min(max_workers, num_frames)
+
+    try:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            for i, samples in enumerate(executor.map(process_single_frame_decode, frames_to_process), start=1):
+                all_samples.append(samples)
+                print(f"\rTrama {i}/{num_frames} decodificada", end='', flush=True)
+    except Exception as e:
+        # Fallback a hilos si falla la ejecución por procesos
+        print(f"Error al ejecutar con procesos, usando hilos en su lugar. Error: {e}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for i, samples in enumerate(executor.map(process_single_frame_decode, frames_to_process), start=1):
+                all_samples.append(samples)
+                print(f"\rTrama {i}/{num_frames} decodificada", end='', flush=True)
+
     print()
     return np.concatenate(all_samples)
 
@@ -176,7 +198,7 @@ if __name__ == "__main__":
         audio_data = decode_frames(frames_data)
         
         # Guardar WAV
-        wavfile.write("Decoded_Audio_v2.wav", fs, audio_data)
+        wavfile.write("Decoded_Audio_v3.wav", fs, audio_data)
         
         print("\nDecodificación completada")
         

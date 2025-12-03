@@ -2,8 +2,8 @@ import numpy as np
 from scipy.io import wavfile
 import matplotlib.pyplot as plt
 
-PATH_ORIGINAL = "TunnelOfLove_mono.wav"
-PATH_ENCODED = "Decoded_Audio_v2.wav"
+PATH_ORIGINAL = "SultansOfSwing_mono.wav"
+PATH_ENCODED = "Decoded_Audio_v3.wav"
 
 fs1, audio1 = wavfile.read(PATH_ORIGINAL)
 fs2, audio2 = wavfile.read(PATH_ENCODED)
@@ -12,11 +12,18 @@ assert len(audio1) == len(audio2), "Duracion audio 1 = {}, Duracion audio 2 = {}
 
 Igual = True
 
-for i in range(len(audio1)):
-    if audio1[i] != audio2[i]:
-        Igual = False
-        print(f"Las señales difieren en la muestra {i}: original={audio1[i]}, decodificada={audio2[i]}")
-        break
+if audio1.ndim == 2 and audio2.ndim == 2:
+    for i in range(len(audio1)):
+        if (audio1[i][0] != audio2[i][0]) or (audio1[i][1] != audio2[i][1]):
+            Igual = False
+            print(f"Las señales difieren en la muestra {i}: original={audio1[i]}, decodificada={audio2[i]}")
+            break
+else:
+    for i in range(len(audio1)):
+        if audio1[i] != audio2[i]:
+            Igual = False
+            print(f"Las señales difieren en la muestra {i}: original={audio1[i]}, decodificada={audio2[i]}")
+            break
 
 if Igual:
     print("Las señales son exactamente iguales")

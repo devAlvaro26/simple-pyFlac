@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.io import wavfile
 import struct
+import concurrent.futures
+import os
 
 PATH_AUDIO = "SultansOfSwing_mono.wav"
 FRAME_SIZE = 4096   # Tamaño de trama en muestras
@@ -72,7 +74,7 @@ def levinson_durbin(r, order):
 
 def LPC(frame, order):
     '''
-    Calcula coeficientes LPC y valor residual para una trama.
+    Calcula los coeficientes LPC y el residuo para el fragmento dado.
     '''
     frame = frame.astype(np.float64)
     r = autocorr(frame, order)
@@ -83,21 +85,21 @@ def LPC(frame, order):
     predicted = np.zeros(N, dtype=np.float64)
     residual = np.zeros(N, dtype=np.int64)
     
-    # Las primeras 'order' muestras se guardan crudas
+    # Las primeras 'order' no se predicen
     if N > 0:
         head = min(order, N)
         residual[:head] = np.int64(np.round(frame[:head]))
 
-    for n in range(order, N):
-        # 1. Predecir
-        prediction_val = np.dot(coefs, frame[n-order:n][::-1])
-        
-        # 2. REDONDEAR la predicción
-        predicted_int = np.round(prediction_val)
-        
-        # 3. Calcular residuo entero
-        residual_val = frame[n] - predicted_int
-        residual[n] = np.int64(residual_val)
+    # Para el resto, se predice el valor usando los coeficientes LPC
+    if N > order:
+        conv = np.convolve(frame, coefs, mode='full')
+        # La predicción para cada muestra es el resultado de la convolución
+        predicted_section = conv[order-1:N-1]
+        predicted[order:N] = predicted_section
+
+        # El residuo es la diferencia entre el valor real y el predicho, redondeado
+        predicted_int = np.round(predicted[order:N]).astype(np.int64)
+        residual[order:N] = np.int64(np.round(frame[order:N])) - predicted_int
 
     return residual, coefs, e
 
@@ -119,22 +121,21 @@ def optimal_k(residual):
     '''
     if len(residual) == 0:
         return 0
-    
-    k = 0
+
+    # Vectorizar zigzag y cálculo de bits por k usando numpy
+    res = np.asarray(residual, dtype=np.int64)
+    folded = np.where(res >= 0, res * 2, -res * 2 - 1).astype(np.int64)
+
     min_bits = np.inf
-    
-    # Probar k de 0 a 16
+    k = 0
     for k_opt in range(17):
-        total_bits = 0
-        for sample in residual:
-            folded = zigzag_encode(sample)
-            q = folded >> k_opt
-            total_bits += q + 1 + k_opt  # unary + separator + remainder
-        
+        q = folded >> k_opt
+        # bits por muestra: q (ceros) + 1 (uno) + k_opt (remainder)
+        total_bits = int(np.sum(q + 1 + k_opt))
         if total_bits < min_bits:
             min_bits = total_bits
             k = k_opt
-    
+
     return k
 
 
@@ -182,16 +183,38 @@ def bits_to_bytes(bits):
     return bytes(byte_array), padding
 
 
-def process_frames(data, order, frame_size=FRAME_SIZE):
+def process_single_frame(args):
+    '''
+    Función auxiliar para ProcessPoolExecutor.
+    args: (frame, valid_length, order)
+    '''
+    frame, valid_length, order = args
+    residual, coefs, error = LPC(frame, order)
+    residual = residual[:valid_length]
+    k = optimal_k(residual)
+    bits = rice_encode(residual, k)
+    byte_data, padding = bits_to_bytes(bits)
+    return {
+        'bytes': byte_data,
+        'padding': padding,
+        'k': k,
+        'coefs': coefs,
+        'length': valid_length,
+    }
+
+
+def process_frames(data, order, frame_size=FRAME_SIZE, leave_one_core=True):
     '''
     Procesa el audio en tramas, aplicando LPC y codificación Rice.
+    Ejecucución paralela usando hilos o procesos.
     '''
     num_samples = len(data)
     num_frames = (num_samples + frame_size - 1) // frame_size
-    print(f"\nProcesando {num_frames} tramas de {frame_size} muestras")
     
     frames_data = []
     
+    # Preparar datos para procesamiento paralelo: (frame_padded, valid_length)
+    frames_to_process = []
     for i in range(num_frames):
         start = i * frame_size
         end = min(start + frame_size, num_samples)
@@ -200,32 +223,30 @@ def process_frames(data, order, frame_size=FRAME_SIZE):
 
         if len(frame) < frame_size:
             frame = np.pad(frame, (0, frame_size - valid_length), mode='constant')
-        
-        # Calcular LPC
-        residual, coefs, error = LPC(frame, order)
-        
-        # Solo codificar la parte válida
-        residual = residual[:valid_length]
-        
-        # Estimar k óptimo para esta trama (usar el valor estimado)
-        k = optimal_k(residual)
 
-        # Codificar con Rice (rice_encode aplica el zigzag internamente)
-        bits = rice_encode(residual, k)
-        byte_data, padding = bits_to_bytes(bits)
-        
-        frames_data.append({
-            'bytes': byte_data,
-            'padding': padding,
-            'k': k,
-            'coefs': coefs,
-            'length': valid_length,
-        })
-        
-        #Animacion de progreso
-        print(f"\rTrama {i+1}/{num_frames} procesada", end='', flush=True)
+        frames_to_process.append((frame, valid_length, order))
+
+    print(f"\nProcesando {num_frames} tramas de {frame_size} muestras en paralelo")
+
+    # Decidir número de workers según CPU
+    max_workers = os.cpu_count() - 1 if leave_one_core else os.cpu_count()
+    max_workers = min(max_workers, num_frames)
+
+    try:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            for i, result in enumerate(executor.map(process_single_frame, frames_to_process), start=1):
+                frames_data.append(result)
+                print(f"\rTrama {i}/{num_frames} procesada", end='', flush=True)
+    except Exception as e:
+        # Fallback a hilos si falla la ejecución por procesos
+        print(f"Error al ejecutar con procesos, usando hilos en su lugar. Error: {e}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for i, result in enumerate(executor.map(process_single_frame, frames_to_process), start=1):
+                frames_data.append(result)
+                print(f"\rTrama {i}/{num_frames} procesada", end='', flush=True)
     
     print("\n")
+
     return frames_data
 
 
@@ -269,6 +290,6 @@ if __name__ == "__main__":
         fs, data = read_file(PATH_AUDIO)
         if data is not None:
             frames_data = process_frames(data, ORDER, frame_size=FRAME_SIZE)
-            save_audio_encoded("encoded_v2.bin", frames_data, fs, ORDER, FRAME_SIZE)
+            save_audio_encoded("encoded_v3.bin", frames_data, fs, ORDER, FRAME_SIZE)
     except Exception as e:
         print(f"Error durante la codificación: {e}")
