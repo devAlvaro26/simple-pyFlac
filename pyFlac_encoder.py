@@ -41,10 +41,14 @@ def read_file(path):
 
 def mid_side_encode(left, right):
     '''
-    Convierte canales L/R a Mid-Side
+    Convierte canales L/R a Mid-Side.
     '''
+
+    left = left.astype(np.int64)
+    right = right.astype(np.int64)
+    
+    mid = (left + right) // 2
     side = left - right
-    mid = left - (side >> 1)
 
     return mid, side
 
@@ -109,7 +113,7 @@ def LPC(frame, order):
     # Vectorizar la predicción usando convolución
     if N > order:
         conv = np.convolve(frame, coefs, mode='full')
-        # Para n en [order, N-1], la predicción es conv[n-1]
+        # Para n en [order, N-1], conv[n-1]
         predicted_section = conv[order-1:N-1]
         predicted[order:N] = predicted_section
 
@@ -277,8 +281,8 @@ def save_audio_encoded(filename, frames_data, sample_rate, predictor_order, fram
         f.write(struct.pack('<H', predictor_order))
         f.write(struct.pack('<H', frame_size))
         f.write(struct.pack('<B', num_channels))
-        f.write(struct.pack('<B', bits_per_sample)) # Bits por muestra
-        f.write(struct.pack('<B', 1 if use_mid_side else 0))  # Flag Mid-Side
+        f.write(struct.pack('<B', bits_per_sample))
+        f.write(struct.pack('<B', 1 if use_mid_side else 0))
         f.write(struct.pack('<I', num_frames))
         # Para cada trama y canal: metadata + coeficientes + datos
         for frame_idx in range(num_frames):

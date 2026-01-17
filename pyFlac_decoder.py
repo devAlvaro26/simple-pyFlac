@@ -96,14 +96,21 @@ def lpc_synthesis(residual, coefs):
     return reconstructed
 
 
-def mid_side_decode(mid, side):
+def mid_side_decode(mid, side, bits_per_sample):
     '''
-    Convierte Mid-Side de vuelta a L/R.
+    Convierte Mid-Side de vuelta a L/R
+    r = |Side| % 2 (residuo perdido en división)
     '''
-    left = (mid + (side >> 1))
-    right = (left - side)
-
-    return left, right
+    mid = mid.astype(np.int64)
+    side = side.astype(np.int64)
+    
+    r = np.abs(side) % 2
+    
+    left = mid + (side + r) // 2
+    right = mid + (r - side) // 2
+    
+    dtype = np.int16 if bits_per_sample == 16 else np.int32
+    return left.astype(dtype), right.astype(dtype)
 
 
 def process_single_frame_decode(args):
@@ -160,10 +167,9 @@ def decode_frames(frames_data, use_mid_side, bits_per_sample, leave_one_core=Fal
         print()
         all_channels.append(np.concatenate(all_samples))
     
-    # Si Mid-Side, convertir de vuelta a L/R
     if use_mid_side and num_channels == 2:
         print("\nConvirtiendo Mid-Side a L/R...")
-        left, right = mid_side_decode(all_channels[0], all_channels[1])
+        left, right = mid_side_decode(all_channels[0], all_channels[1], bits_per_sample)
         return np.stack([left, right], axis=-1)
     elif num_channels == 1:
         return all_channels[0]
