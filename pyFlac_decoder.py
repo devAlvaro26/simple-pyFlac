@@ -8,7 +8,7 @@ ENCODED_FILE = "encoded.pyflac"
 
 def bytes_to_bits(byte_data):
     '''
-    Convierte bytes a lista de bits.
+    Converts bytes to a list of bits.
     '''
     bits = []
     for byte in byte_data:
@@ -19,7 +19,7 @@ def bytes_to_bits(byte_data):
 
 def zigzag_decode(x):
     '''
-    Decodificación zigzag.
+    Zigzag decoding.
     '''
     x = int(x)
     if x % 2 == 0:
@@ -30,7 +30,7 @@ def zigzag_decode(x):
 
 def rice_decode(byte_data, k, num_samples):
     '''
-    Decodificación Rice.
+    Rice decoding.
     '''
     decoded = []
 
@@ -38,7 +38,7 @@ def rice_decode(byte_data, k, num_samples):
     i = 0
     
     while len(decoded) < num_samples and i < len(bits):
-        # Leer unary: contar ceros hasta encontrar un uno
+        # Read unary: count zeros until a one is found
         q = 0
         while i < len(bits) and bits[i] == 0:
             q += 1
@@ -47,10 +47,10 @@ def rice_decode(byte_data, k, num_samples):
         if i >= len(bits):
             break
         
-        # Saltar el uno del unary
+        # Skip the one from unary
         i += 1
         
-        # Leer k bits para el resto
+        # Read k bits for the remainder
         if i + k > len(bits):
             break
         
@@ -59,10 +59,10 @@ def rice_decode(byte_data, k, num_samples):
             r = (r << 1) | bits[i]
             i += 1
         
-        # Reconstruir folded value
+        # Reconstruct folded value
         folded = (q << k) | r
         
-        # Aplicar zigzag decoding
+        # Apply zigzag decoding
         sample = zigzag_decode(folded)
         decoded.append(sample)
     
@@ -71,13 +71,13 @@ def rice_decode(byte_data, k, num_samples):
 
 def lpc_synthesis(residual, coefs):
     '''
-    Reconstruye la señal a partir del residual y coeficientes LPC.
+    Reconstructs the signal from the residual and LPC coefficients.
     '''
     order = len(coefs)
     N = len(residual)
     reconstructed = np.zeros(N, dtype=np.float64)
     
-    # Copiar las primeras 'order' muestras
+    # Copy the first 'order' samples
     if order > 0:
         reconstructed[:order] = residual[:order].astype(np.float64)
     
@@ -87,10 +87,10 @@ def lpc_synthesis(residual, coefs):
         if not np.isfinite(prediction):
             prediction = 0.0
         
-        # Redondear la predicción antes de sumar el residuo
+        # Round the prediction before adding the residual
         prediction = np.round(prediction)
 
-        # Reconstruir la muestra
+        # Reconstruct the sample
         reconstructed[n] = residual[n] + prediction
     
     return reconstructed
@@ -98,8 +98,8 @@ def lpc_synthesis(residual, coefs):
 
 def mid_side_decode(mid, side, bits_per_sample):
     '''
-    Convierte Mid-Side de vuelta a L/R
-    r = |Side| % 2 (residuo perdido en división)
+    Converts Mid-Side back to L/R
+    r = |Side| % 2 (residual lost in division)
     '''
     mid = mid.astype(np.int64)
     side = side.astype(np.int64)
@@ -115,7 +115,7 @@ def mid_side_decode(mid, side, bits_per_sample):
 
 def process_single_frame_decode(args):
     '''
-    Función auxiliar para ProcessPoolExecutor.
+    Helper function for ProcessPoolExecutor.
     '''
     byte_data, k, length, coefs, bits_per_sample = args
     residual = rice_decode(byte_data, k, length).astype(np.int64)
@@ -128,8 +128,8 @@ def process_single_frame_decode(args):
 
 def decode_frames(frames_data, use_mid_side, bits_per_sample, leave_one_core=False):
     '''
-    Decodifica las tramas procesadas, aplicando síntesis LPC y decodificación Rice.
-    Ejecución paralela usando hilos o procesos.
+    Decodes the processed frames, applying LPC synthesis and Rice decoding.
+    Parallel execution using threads or processes.
     '''
     num_channels = len(frames_data)
     all_channels = []
@@ -138,16 +138,16 @@ def decode_frames(frames_data, use_mid_side, bits_per_sample, leave_one_core=Fal
         ch_frames = frames_data[ch]
         all_samples = []
         num_frames = len(ch_frames)
-        channel_name = "Mid" if (use_mid_side and ch == 0) else "Side" if (use_mid_side and ch == 1) else f"Canal {ch+1}"
+        channel_name = "Mid" if (use_mid_side and ch == 0) else "Side" if (use_mid_side and ch == 1) else f"Channel {ch+1}"
         
-        print(f"\nDecodificando {num_frames} tramas en paralelo para {channel_name}...")
+        print(f"\nDecoding {num_frames} frames in parallel for {channel_name}...")
         
-        # Preparar datos para procesamiento paralelo
+        # Prepare data for parallel processing
         frames_to_process = []
         for frame in ch_frames:
             frames_to_process.append((frame['bytes'], frame['k'], frame['length'], frame['coefs'], bits_per_sample))
         
-        # Decidir número de workers según CPU
+        # Decide number of workers based on CPU
         max_workers = os.cpu_count() - 1 if leave_one_core else os.cpu_count()
         max_workers = min(max_workers, num_frames)
         
@@ -155,26 +155,26 @@ def decode_frames(frames_data, use_mid_side, bits_per_sample, leave_one_core=Fal
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                 for i, samples in enumerate(executor.map(process_single_frame_decode, frames_to_process), start=1):
                     all_samples.append(samples)
-                    print(f"\rTrama {i}/{num_frames} decodificada", end='', flush=True)
+                    print(f"\rFrame {i}/{num_frames} decoded", end='', flush=True)
         except Exception as e:
-            # Fallback a hilos si falla la ejecución por procesos
-            print(f"Error al ejecutar con procesos, usando hilos en su lugar. Error: {e}")
+            # Fallback to threads if process execution fails
+            print(f"Error executing with processes, using threads instead. Error: {e}")
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 for i, samples in enumerate(executor.map(process_single_frame_decode, frames_to_process), start=1):
                     all_samples.append(samples)
-                    print(f"\rTrama {i}/{num_frames} decodificada", end='', flush=True)
+                    print(f"\rFrame {i}/{num_frames} decoded", end='', flush=True)
         
         print()
         all_channels.append(np.concatenate(all_samples))
     
     if use_mid_side and num_channels == 2:
-        print("\nConvirtiendo Mid-Side a L/R...")
+        print("\nConverting Mid-Side to L/R...")
         left, right = mid_side_decode(all_channels[0], all_channels[1], bits_per_sample)
         return np.stack([left, right], axis=-1)
     elif num_channels == 1:
         return all_channels[0]
     else:
-        # Empaquetar canales en matriz (N, 2)
+        # Pack channels into matrix (N, 2)
         min_len = min(len(ch) for ch in all_channels)
         stacked = np.stack([ch[:min_len] for ch in all_channels], axis=-1)
         return stacked
@@ -182,10 +182,10 @@ def decode_frames(frames_data, use_mid_side, bits_per_sample, leave_one_core=Fal
 
 def load_audio_encoded(filename):
     '''
-    Carga el archivo binario codificado (soporta mono y estéreo).
+    Loads the encoded binary file (supports mono and stereo).
     '''
     with open(filename, 'rb') as f:
-        # Leer header
+        # Read header
         sample_rate = struct.unpack('<I', f.read(4))[0]
         predictor_order = struct.unpack('<H', f.read(2))[0]
         frame_size = struct.unpack('<H', f.read(2))[0]
@@ -198,7 +198,7 @@ def load_audio_encoded(filename):
         print(f"Bits per sample: {bits_per_sample}")
         print(f"Predictor order: {predictor_order}")
         print(f"Frame size: {frame_size}")
-        print(f"Canales: {num_channels}")
+        print(f"Channels: {num_channels}")
 
         # frames_data[channel][frame]
         frames_data = [[] for _ in range(num_channels)]
@@ -220,21 +220,21 @@ def load_audio_encoded(filename):
                     'bytes': byte_data,
                     'coefs': coefs
                 })
-            print(f"\rCargando tramas {i+1}/{num_frames}", end='', flush=True)
+            print(f"\rLoading frames {i+1}/{num_frames}", end='', flush=True)
         print()
         return sample_rate, predictor_order, frame_size, frames_data, num_channels, use_mid_side, bits_per_sample
 
 
 if __name__ == "__main__":
     try:
-        # Cargar archivo codificado
+        # Load encoded file
         fs, order, frame_size, frames_data, num_channels, use_mid_side, bits_per_sample = load_audio_encoded(ENCODED_FILE)
-        # Decodificar
+        # Decode
         audio_data = decode_frames(frames_data, use_mid_side, bits_per_sample)
-        # Guardar WAV
+        # Save WAV
         wavfile.write("Decoded_Audio.wav", fs, audio_data)
-        print("\nDecodificación completada")
+        print("\nDecoding completed")
     except FileNotFoundError:
-        print(f"Error: Archivo '{ENCODED_FILE}' no encontrado")
+        print(f"Error: File '{ENCODED_FILE}' not found")
     except Exception as e:
-        print(f"Error durante la decodificación: {e}")
+        print(f"Error during decoding: {e}")

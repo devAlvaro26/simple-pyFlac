@@ -5,22 +5,22 @@ import concurrent.futures
 import os
 
 PATH_AUDIO = "SultansOfSwing.wav"
-FRAME_SIZE = 4096   # Tamaño de trama en muestras
-ORDER = 12          # Orden del predictor LPC (4-16)
+FRAME_SIZE = 4096   # Frame size in samples
+ORDER = 12          # LPC predictor order (4-16)
 
 def read_file(path):
     '''
-    Lee un archivo de audio y lo devuelve como un array de muestras.
-    Soporta mono y estéreo.
+    Reads an audio file and returns it as an array of samples.
+    Supports mono and stereo.
     '''
     try:
         fs, data = wavfile.read(path)
         if data.dtype != np.int16 and data.dtype != np.int32:
-            raise ValueError("Solo se soporta audio int16 o int32")
+            raise ValueError("Only int16 or int32 audio is supported")
 
-        print(f"Frecuencia de muestreo: {fs} Hz")
-        print(f"Tipo de datos: {data.dtype}")
-        print(f"Tamaño: {data.shape}")
+        print(f"Sample rate: {fs} Hz")
+        print(f"Data type: {data.dtype}")
+        print(f"Size: {data.shape}")
 
         if data.ndim == 1:
             # Mono
@@ -29,19 +29,19 @@ def read_file(path):
             # Estéreo
             return fs, 2, [data[:, 0], data[:, 1]]
         else:
-            raise ValueError("Solo se soporta audio mono o estéreo (2 canales)")
+            raise ValueError("Only mono or stereo (2 channels) audio is supported")
 
     except FileNotFoundError:
-        print(f"Error: Archivo '{path}' no encontrado")
+        print(f"Error: File '{path}' not found")
         return None, None, None
     except Exception as e:
-        print(f"Error al leer archivo: {e}")
+        print(f"Error reading file: {e}")
         return None, None, None
 
 
 def mid_side_encode(left, right):
     '''
-    Convierte canales L/R a Mid-Side.
+    Converts L/R channels to Mid-Side.
     '''
 
     left = left.astype(np.int64)
@@ -55,7 +55,7 @@ def mid_side_encode(left, right):
 
 def autocorr(x, order):
     '''
-    Autocorrelación de orden dado.
+    Autocorrelation of given order.
     '''
     N = len(x)
     r = np.zeros(order + 1, dtype=np.float64)
@@ -68,7 +68,7 @@ def autocorr(x, order):
 
 def levinson_durbin(r, order):
     '''
-    Algoritmo Levinson-Durbin.
+    Levinson-Durbin algorithm.
     '''
     a = np.zeros(order+1, dtype=np.float64)
     a[0] = 1.0
@@ -94,7 +94,7 @@ def levinson_durbin(r, order):
 
 def LPC(frame, order):
     '''
-    Calcula coeficientes LPC y valor residual para una trama.
+    Calculates LPC coefficients and residual value for a frame.
     '''
     frame = frame.astype(np.float64)
     r = autocorr(frame, order)
@@ -105,19 +105,19 @@ def LPC(frame, order):
     predicted = np.zeros(N, dtype=np.float64)
     residual = np.zeros(N, dtype=np.int64)
     
-    # Las primeras 'order' muestras se guardan crudas
+    # The first 'order' samples are saved raw
     if N > 0:
         head = min(order, N)
         residual[:head] = np.int64(np.round(frame[:head]))
 
-    # Vectorizar la predicción usando convolución
+    # Vectorize prediction using convolution
     if N > order:
         conv = np.convolve(frame, coefs, mode='full')
-        # Para n en [order, N-1], conv[n-1]
+        # For n in [order, N-1], conv[n-1]
         predicted_section = conv[order-1:N-1]
         predicted[order:N] = predicted_section
 
-        # Redondear y calcular residuo de forma vectorizada
+        # Round and calculate residual in a vectorized way
         predicted_int = np.round(predicted[order:N]).astype(np.int64)
         residual[order:N] = np.int64(np.round(frame[order:N])) - predicted_int
 
@@ -126,7 +126,7 @@ def LPC(frame, order):
 
 def zigzag_encode(x):
     '''
-    Zigzag encoding para enteros.
+    Zigzag encoding for integers.
     '''
     x = int(x)
     if x >= 0:
@@ -137,12 +137,12 @@ def zigzag_encode(x):
 
 def optimal_k(residual):
     '''
-    Estima el mejor valor de k.
+    Estimates the best value of k.
     '''
     if len(residual) == 0:
         return 0
 
-    # Vectorizar zigzag y cálculo de bits por k usando numpy
+    # Vectorize zigzag and bit calculation per k using numpy
     res = np.asarray(residual, dtype=np.int64)
     folded = np.where(res >= 0, res * 2, -res * 2 - 1).astype(np.int64)
 
@@ -150,7 +150,7 @@ def optimal_k(residual):
     k = 0
     for k_opt in range(33):
         q = folded >> k_opt
-        # bits por muestra: q (ceros) + 1 (uno) + k_opt (remainder)
+        # bits per sample: q (zeros) + 1 (one) + k_opt (remainder)
         total_bits = int(np.sum(q + 1 + k_opt))
         if total_bits < min_bits:
             min_bits = total_bits
@@ -161,24 +161,24 @@ def optimal_k(residual):
 
 def rice_encode(residual, k):
     '''
-    Codificación Rice
+    Rice coding
     '''
     bits = []
     
     for sample in residual:
-        # Zigzag encoding para enteros
+        # Zigzag encoding for integers
         folded = zigzag_encode(sample)
         
-        # Dividir en quotient y remainder
+        # Divide into quotient and remainder
         q = folded >> k
         r = folded & ((1 << k) - 1)
         
-        # Unary para quotient: q ceros seguidos de un uno
+        # Unary for quotient: q zeros followed by a one
         for _ in range(q):
             bits.append(0)
         bits.append(1)
         
-        # Binario para remainder (k bits, MSB primero)
+        # Binary for remainder (k bits, MSB first)
         for i in range(k - 1, -1, -1):
             bits.append((r >> i) & 1)
     
@@ -187,7 +187,7 @@ def rice_encode(residual, k):
 
 def bits_to_bytes(bits):
     '''
-    Convierte lista de bits a bytes.
+    Converts list of bits to bytes.
     '''
     padding = (8 - (len(bits) % 8)) % 8
     if padding:
@@ -205,7 +205,7 @@ def bits_to_bytes(bits):
 
 def process_single_frame(args):
     '''
-    Función auxiliar para ProcessPoolExecutor.
+    Helper function for ProcessPoolExecutor.
     '''
     frame, valid_length, order = args
     residual, coefs, error = LPC(frame, order)
@@ -224,15 +224,15 @@ def process_single_frame(args):
 
 def process_frames(data, order, frame_size=FRAME_SIZE, leave_one_core=False):
     '''
-    Procesa el audio en tramas, aplicando LPC y codificación Rice.
-    Ejecucución paralela usando hilos o procesos.
+    Processes audio into frames, applying LPC and Rice coding.
+    Parallel execution using threads or processes.
     '''
     num_samples = len(data)
     num_frames = (num_samples + frame_size - 1) // frame_size
     
     frames_data = []
     
-    # Preparar datos para procesamiento paralelo: (frame_padded, valid_length)
+    # Prepare data for parallel processing: (frame_padded, valid_length)
     frames_to_process = []
     for i in range(num_frames):
         start = i * frame_size
@@ -245,9 +245,9 @@ def process_frames(data, order, frame_size=FRAME_SIZE, leave_one_core=False):
 
         frames_to_process.append((frame, valid_length, order))
 
-    print(f"\nProcesando {num_frames} tramas de {frame_size} muestras en paralelo")
+    print(f"\nProcessing {num_frames} frames of {frame_size} samples in parallel")
 
-    # Decidir número de workers según CPU
+    # Decide number of workers based on CPU
     max_workers = os.cpu_count() - 1 if leave_one_core else os.cpu_count()
     max_workers = min(max_workers, num_frames)
 
@@ -255,14 +255,14 @@ def process_frames(data, order, frame_size=FRAME_SIZE, leave_one_core=False):
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
             for i, result in enumerate(executor.map(process_single_frame, frames_to_process), start=1):
                 frames_data.append(result)
-                print(f"\rTrama {i}/{num_frames} procesada", end='', flush=True)
+                print(f"\rFrame {i}/{num_frames} processed", end='', flush=True)
     except Exception as e:
-        # Fallback a hilos si falla la ejecución por procesos
-        print(f"Error al ejecutar con procesos, usando hilos en su lugar. Error: {e}")
+        # Fallback to threads if process execution fails
+        print(f"Error executing with processes, using threads instead. Error: {e}")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             for i, result in enumerate(executor.map(process_single_frame, frames_to_process), start=1):
                 frames_data.append(result)
-                print(f"\rTrama {i}/{num_frames} procesada", end='', flush=True)
+                print(f"\rFrame {i}/{num_frames} processed", end='', flush=True)
     
     print("\n")
 
@@ -271,12 +271,12 @@ def process_frames(data, order, frame_size=FRAME_SIZE, leave_one_core=False):
 
 def save_audio_encoded(filename, frames_data, sample_rate, predictor_order, frame_size, use_mid_side, bits_per_sample):
     '''
-    Guarda en formato binario. frames_data debe ser una lista de listas (por canal).
+    Saves in binary format. frames_data must be a list of lists (per channel).
     '''
     num_channels = len(frames_data)
     num_frames = len(frames_data[0])
     with open(filename, 'wb') as f:
-        # Cabeceras de datos
+        # Data headers
         f.write(struct.pack('<I', sample_rate))
         f.write(struct.pack('<H', predictor_order))
         f.write(struct.pack('<H', frame_size))
@@ -284,7 +284,7 @@ def save_audio_encoded(filename, frames_data, sample_rate, predictor_order, fram
         f.write(struct.pack('<B', bits_per_sample))
         f.write(struct.pack('<B', 1 if use_mid_side else 0))
         f.write(struct.pack('<I', num_frames))
-        # Para cada trama y canal: metadata + coeficientes + datos
+        # For each frame and channel: metadata + coefficients + data
         for frame_idx in range(num_frames):
             for ch in range(num_channels):
                 frame = frames_data[ch][frame_idx]
@@ -292,18 +292,18 @@ def save_audio_encoded(filename, frames_data, sample_rate, predictor_order, fram
                 f.write(struct.pack('<B', frame['padding']))
                 f.write(struct.pack('<H', frame['length']))
                 f.write(struct.pack('<H', len(frame['bytes'])))
-                # Coeficientes
+                # Coefs
                 for coef in frame['coefs']:
                     f.write(struct.pack('<f', coef))
-                # Datos comprimidos
+                # Compressed data
                 f.write(frame['bytes'])
-    # Estadísticas
+    # Statistics
     compressed_size = sum(sum(len(frame['bytes']) for frame in ch_frames) for ch_frames in frames_data)
     original_size = sum(sum(frame['length'] for frame in ch_frames) for ch_frames in frames_data) * 2
     ratio = (compressed_size / original_size) * 100 if original_size > 0 else 0.0
-    print("================= Estadísticas de Compresión ================")
-    print(f"Tamaño original: {original_size:,} bytes")
-    print(f"Tamaño comprimido: {compressed_size:,} bytes")
+    print("============= Compression Statistics =============")
+    print(f"Original size: {original_size:,} bytes")
+    print(f"Compressed size: {compressed_size:,} bytes")
     print(f"Ratio: {ratio:.2f}%")
 
 
@@ -311,7 +311,7 @@ if __name__ == "__main__":
     try:
         fs, num_channels, data_channels = read_file(PATH_AUDIO)
         if data_channels is not None:
-            # Detectar bits por muestra
+            # Detect bits per sample
             bits_per_sample = 0
             if data_channels[0].dtype == np.int16:
                 bits_per_sample = 16
@@ -329,17 +329,17 @@ if __name__ == "__main__":
             else:
                 data_to_process = data_channels
                 use_mid_side = False
-                channel_names = [f"Canal {i+1}" for i in range(num_channels)]
+                channel_names = [f"Channel {i+1}" for i in range(num_channels)]
             
             for ch, data in enumerate(data_to_process):
-                print(f"\nProcesando {channel_names[ch]} ({ch+1}/{num_channels})")
+                print(f"\nProcessing {channel_names[ch]} ({ch+1}/{num_channels})")
                 frames = process_frames(data, ORDER, frame_size=FRAME_SIZE)
                 frames_data.append(frames)
             
             save_audio_encoded("encoded.pyflac", frames_data, fs, ORDER, FRAME_SIZE, use_mid_side, bits_per_sample)
         else:
-            print("El archivo está vacío")
+            print("The file is empty")
     except FileNotFoundError:
-        print(f"Error: Archivo '{PATH_AUDIO}' no encontrado")
+        print(f"Error: File '{PATH_AUDIO}' not found")
     except Exception as e:
-        print(f"Error durante la codificación: {e}")
+        print(f"Error during encoding: {e}")
